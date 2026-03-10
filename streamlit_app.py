@@ -25,8 +25,11 @@ def load_model_and_tokenizer():
     if os.path.exists(path):
         tokenizer = AutoTokenizer.from_pretrained(path)
         model = AutoModelForSequenceClassification.from_pretrained(path)
-        return tokenizer, model
-    return None, None
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
+        model.eval()
+        return tokenizer, model, device
+    return None, None, None
 
 def render_heatmap(tokens, scores, title="Heatmap"):
     # Normalize scores
@@ -47,20 +50,39 @@ if page == "Polarization Detector":
     lang = st.selectbox("Language", ["English", "Hindi", "Telugu", "Auto-detect"])
     
     if st.button("Predict"):
-        tokenizer, model = load_model_and_tokenizer()
+        tokenizer, model, device = load_model_and_tokenizer()
         if model is None:
-            st.error("Model not found. Please train first.")
+            st.error("Model not found. Train and save to models/mbert_multilingual")
+            st.stop()
         elif not text:
             st.warning("Please enter text.")
+            st.stop()
         else:
             inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=128)
+            inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = model(**inputs)
-                probs = torch.softmax(outputs.logits, dim=1)[0].numpy()
+                probs = torch.softmax(outputs.logits, dim=1)[0].cpu().numpy()
                 pred = "Polarized" if probs[1] > 0.5 else "Not Polarized"
             
-            st.subheader(f"Prediction: {pred} (Confidence: {probs[1]:.2f})")
-            st.progress(float(probs[1]))
+            # UX Tweaks: Placed prediction inside a styled banner and a Plotly Gauge
+            if pred == "Polarized":
+                st.error(f"### Prediction: {pred}")
+            else:
+                st.success(f"### Prediction: {pred}")
+                
+            fig = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = probs[1] * 100,
+                title = {'text': "Polarization Probability (%)"},
+                gauge = {'axis': {'range': [0, 100]},
+                         'bar': {'color': "red" if probs[1] > 0.5 else "green"},
+                         'steps': [
+                             {'range': [0, 50], 'color': "lightgreen"},
+                             {'range': [50, 100], 'color': "lightcoral"}],
+                         'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 50}}
+            ))
+            st.plotly_chart(fig, use_container_width=True)
             
             # Simple attention extraction for demo
             st.write("Generating Explanations...")
@@ -105,11 +127,16 @@ elif page == "Dataset Explorer":
         with col2:
             st.subheader("Data Samples")
             filt_lang = st.selectbox("Filter Lang", ['All'] + list(df['lang'].unique()))
+            filt_pol = st.selectbox("Filter Polarization", ['All'] + list(df['polarization'].unique()))
+            
             if filt_lang != 'All':
                 df = df[df['lang'] == filt_lang]
+            if filt_pol != 'All':
+                df = df[df['polarization'] == filt_pol]
+                
             st.dataframe(df.head(50))
     else:
-        st.error("Dataset not found.")
+        st.error("Dataset not found at data/Trial_Data.csv")
 
 elif page == "Model Performance":
     st.title("Model Performance Dashboard 📈")
@@ -138,6 +165,11 @@ elif page == "XAI Comparison":
         with open(ig_path) as f: ig_data = json.load(f)
         with open(att_path) as f: att_data = json.load(f)
         
+        lime_path = os.path.join(exp_dir, 'explanations_lime.json')
+        lime_data = None
+        if os.path.exists(lime_path):
+            with open(lime_path) as f: lime_data = json.load(f)
+        
         sample_ids = [str(item['id']) for item in ig_data]
         selected_id = st.selectbox("Select Sample ID", sample_ids)
         
@@ -147,22 +179,49 @@ elif page == "XAI Comparison":
         st.write("**Text:**", ig_sample['text'])
         st.write("**Label:**", "Polarized" if ig_sample['label'] == 1 else "Not Polarized")
         
-        col1, col2 = st.columns(2)
-        with col1:
+        # Load tokenizer to filter out special tokens
+        tokenizer_path = os.path.join(models_dir, 'mbert_multilingual')
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path) if os.path.exists(tokenizer_path) else None
+        
+        def process_tokens_scores(t_list, s_list):
+            if not tokenizer: return t_list, s_list
+            clean_t, clean_s = [], []
+            for t, s in zip(t_list, s_list):
+                if t not in tokenizer.all_special_tokens:
+                    clean_t.append(t)
+                    clean_s.append(s)
+            return clean_t, clean_s
+            
+        t_ig, s_ig = zip(*ig_sample['all_scores'])
+        t_ig, s_ig = process_tokens_scores(t_ig, s_ig)
+        
+        t_att, s_att = zip(*att_sample['all_scores'])
+        t_att, s_att = process_tokens_scores(t_att, s_att)
+        
+        # Determine columns dynamically based on if LIME is present
+        cols = st.columns(3 if lime_data else 2)
+        
+        with cols[0]:
             st.subheader("Integrated Gradients")
-            t_ig, s_ig = zip(*ig_sample['all_scores'])
             render_heatmap(t_ig, s_ig, "IG Heatmap")
-        with col2:
+        with cols[1]:
             st.subheader("Attention")
-            t_att, s_att = zip(*att_sample['all_scores'])
             render_heatmap(t_att, s_att, "Attention Heatmap")
+        
+        if lime_data:
+            lime_sample = next(item for item in lime_data if str(item['id']) == selected_id)
+            t_lime, s_lime = zip(*lime_sample['all_scores'])
+            t_lime, s_lime = process_tokens_scores(t_lime, s_lime)
+            with cols[2]:
+                st.subheader("LIME")
+                render_heatmap(t_lime, s_lime, "LIME Heatmap")
             
         f_path = os.path.join(results_dir, 'faithfulness_results.csv')
         if os.path.exists(f_path):
             st.subheader("Faithfulness Metrics")
             st.dataframe(pd.read_csv(f_path))
     else:
-        st.info("XAI explanations not found.")
+        st.error("XAI explanations not found in the explanations/ directory. Run the XAI generation scripts first.")
 
 elif page == "Bias Audit":
     st.title("Bias Audit ⚖️")
