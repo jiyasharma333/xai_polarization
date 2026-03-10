@@ -29,10 +29,16 @@ logger = logging.getLogger(__name__)
 
 class PolarDataset(Dataset):
     def __init__(self, texts, labels, tokenizer, max_len):
-        self.texts, self.labels, self.tokenizer, self.max_len = list(texts), list(labels), tokenizer, max_len
+        self.texts = [str(t) for t in texts]
+        # Safely extract and cast labels to integers to prevent DataLoader crashes
+        self.labels = [int(float(l)) if pd.notna(l) else 0 for l in labels]
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+        
     def __len__(self): return len(self.texts)
+    
     def __getitem__(self, item):
-        encoding = self.tokenizer.encode_plus(str(self.texts[item]), add_special_tokens=True, max_length=self.max_len, padding='max_length', truncation=True, return_attention_mask=True, return_tensors='pt')
+        encoding = self.tokenizer.encode_plus(self.texts[item], add_special_tokens=True, max_length=self.max_len, padding='max_length', truncation=True, return_attention_mask=True, return_tensors='pt')
         return {'input_ids': encoding['input_ids'].flatten(), 'attention_mask': encoding['attention_mask'].flatten(), 'labels': torch.tensor(self.labels[item], dtype=torch.long)}
 
 def evaluate(model, data_loader):
@@ -86,9 +92,9 @@ def main():
     data_dir = os.path.join(base_dir, 'data')
     models_dir = os.path.join(base_dir, 'models')
     
-    train_df = pd.read_csv(os.path.join(data_dir, 'train.csv')).dropna(subset=['text_clean'])
-    dev_df = pd.read_csv(os.path.join(data_dir, 'dev.csv')).dropna(subset=['text_clean'])
-    test_df = pd.read_csv(os.path.join(data_dir, 'test.csv')).dropna(subset=['text_clean'])
+    train_df = pd.read_csv(os.path.join(data_dir, 'train.csv')).dropna(subset=['text_clean', 'polarization'])
+    dev_df = pd.read_csv(os.path.join(data_dir, 'dev.csv')).dropna(subset=['text_clean', 'polarization'])
+    test_df = pd.read_csv(os.path.join(data_dir, 'test.csv')).dropna(subset=['text_clean', 'polarization'])
     
     results = []
 
