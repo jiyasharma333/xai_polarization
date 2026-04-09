@@ -32,10 +32,15 @@ def load_model_and_tokenizer():
     return None, None, None
 
 def render_heatmap(tokens, scores, title="Heatmap"):
-    # Normalize scores
     import numpy as np
-    m_val = max(scores) if scores else 1
-    scores = [s / m_val if m_val > 0 else 0 for s in scores]
+    if not scores: return
+    scores = np.array(scores)
+    
+    # Min-Max Scaling for extreme visual contrast. 
+    # Minimum importance = completely transparent (0.0). Maximum importance = pure red (1.0).
+    denom = scores.max() - scores.min()
+    if denom == 0: denom = 1
+    scores = (scores - scores.min()) / denom
     
     html = f"<div><h4>{title}</h4><p style='line-height: 2;'>"
     for t, s in zip(tokens, scores):
@@ -209,12 +214,15 @@ elif page == "XAI Comparison":
             render_heatmap(t_att, s_att, "Attention Heatmap")
         
         if lime_data:
-            lime_sample = next(item for item in lime_data if str(item['id']) == selected_id)
-            t_lime, s_lime = zip(*lime_sample['all_scores'])
-            t_lime, s_lime = process_tokens_scores(t_lime, s_lime)
+            lime_sample = next((item for item in lime_data if str(item['id']) == selected_id), None)
             with cols[2]:
                 st.subheader("LIME")
-                render_heatmap(t_lime, s_lime, "LIME Heatmap")
+                if lime_sample:
+                    t_lime, s_lime = zip(*lime_sample['all_scores'])
+                    t_lime, s_lime = process_tokens_scores(t_lime, s_lime)
+                    render_heatmap(t_lime, s_lime, "LIME Heatmap")
+                else:
+                    st.info("LIME explanation was not generated for this specific random sample (LIME only ran on a smaller subset of 50 samples due to performance).")
             
         f_path = os.path.join(results_dir, 'faithfulness_results.csv')
         if os.path.exists(f_path):
@@ -224,11 +232,11 @@ elif page == "XAI Comparison":
         st.error("XAI explanations not found in the explanations/ directory. Run the XAI generation scripts first.")
 
 elif page == "Bias Audit":
-    st.title("Bias Audit ⚖️")
+    st.title("Bias Audit ")
     b_path = os.path.join(results_dir, 'bias_audit.csv')
     if os.path.exists(b_path):
         df = pd.read_csv(b_path)
-        st.dataframe(df.style.applymap(lambda x: 'background-color: #ffcccc' if x == True else '', subset=['Over_Flagged']))
+        st.dataframe(df.style.map(lambda x: 'background-color: #ffcccc' if x == True else '', subset=['Over_Flagged']))
         
         over = df[df['Over_Flagged'] == True].head(10)
         if not over.empty:

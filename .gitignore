@@ -16,6 +16,8 @@ models/
 results/
 explanations/
 Trial_Data.csv
+*.zip
+*.mp4
 
 # macOS
 .DS_Store

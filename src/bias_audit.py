@@ -18,7 +18,7 @@ def identify_category(token):
         return 'Emotional'
     return 'Other'
 
-def run_bias_audit(data_path, ig_exp_path, output_path, threshold=0.15):
+def run_bias_audit(data_path, ig_exp_path, output_path, threshold=0.03):
     print("Running Bias Audit...")
     try:
         with open(ig_exp_path, 'r') as f:
@@ -54,7 +54,7 @@ def run_bias_audit(data_path, ig_exp_path, output_path, threshold=0.15):
     
     for token, flag_count in token_flag_counts.items():
         # Minimum threshold to avoid noise
-        if flag_count < 2:
+        if flag_count < 1:
             continue
             
         doc_count = token_doc_counts.get(token, 1)
@@ -66,6 +66,9 @@ def run_bias_audit(data_path, ig_exp_path, output_path, threshold=0.15):
         
         category = identify_category(token)
         
+        if category == 'Other':
+            continue
+            
         results.append({
             "Token": token,
             "Category": category,

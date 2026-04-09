@@ -11,8 +11,8 @@ from torch.optim import AdamW
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
 MAX_LEN = 128
-BATCH_SIZE = 16
-EPOCHS = 4
+BATCH_SIZE = 8
+EPOCHS = 3
 LEARNING_RATE = 2e-5
 PATIENCE = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,7 +38,7 @@ class PolarDataset(Dataset):
     def __len__(self): return len(self.texts)
     
     def __getitem__(self, item):
-        encoding = self.tokenizer.encode_plus(self.texts[item], add_special_tokens=True, max_length=self.max_len, padding='max_length', truncation=True, return_attention_mask=True, return_tensors='pt')
+        encoding = self.tokenizer(self.texts[item], add_special_tokens=True, max_length=self.max_len, padding='max_length', truncation=True, return_attention_mask=True, return_tensors='pt')
         return {'input_ids': encoding['input_ids'].flatten(), 'attention_mask': encoding['attention_mask'].flatten(), 'labels': torch.tensor(self.labels[item], dtype=torch.long)}
 
 def evaluate(model, data_loader):
@@ -71,6 +71,8 @@ def train_model(model_name, train_df, dev_df, save_path):
             optimizer.step()
             scheduler.step()
         _, _, _, dev_f1, _ = evaluate(model, dev_loader)
+        logger.info(f"Epoch {epoch+1}/{EPOCHS} - Dev Macro F1: {dev_f1:.4f}")
+        
         if dev_f1 >= best_dev_f1:
             best_dev_f1, patience_counter = dev_f1, 0
             os.makedirs(save_path, exist_ok=True)
